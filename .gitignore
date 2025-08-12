@@ -32,12 +32,16 @@ pnpm-debug.log*
 *.sublime-project
 *.sublime-workspace
 
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.tfplan
+
 # Optional: OS trash
 *.Trash-*
 
 # Optional: TypeScript cache
 *.tsbuildinfo
-
-# Optional: local testing tools
-coverage/
-playwright-report/
