@@ -72,10 +72,11 @@ const Terminal = ({ className }: TerminalProps) => {
     if (commandLowerCase === "help") {
       return (
         <div className="pl-4">
-          <div className="text-yellow-400 font-bold mb-1">Available commands:</div>
+          <div className="text-yellow-400 font-bold mb-1">Available Commands:</div>
           <div><span className="text-purple-400">about</span> - Display information about me</div>
           <div><span className="text-purple-400">skills</span> - List my technical skills</div>
           <div><span className="text-purple-400">certs</span> - View my certifications</div>
+          <div><span className="text-purple-400">work</span> - View my work experience</div>
           <div><span className="text-purple-400">contact</span> - Show contact information</div>
           <div><span className="text-purple-400">clear</span> - Clear the terminal</div>
         </div>
@@ -152,6 +153,34 @@ const Terminal = ({ className }: TerminalProps) => {
           <div>
             <div className="text-blue-400 font-bold">AWS CLF-C02 (Dec 2023 - Apr 2028)</div>
             <p>- AWS Certified Cloud Practitioner</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (commandLowerCase === "work") {
+      return (
+        <div className="pl-4">
+          <div className="text-yellow-400 font-bold mb-1">Work Experience:</div>
+          <div className="mb-2">
+            <div className="text-blue-400 font-bold">DevOps Engineer (Dec 2024 - Present)</div>
+            <p className="text-purple-400">Law Firm</p>
+            <p>• Automated secure AWS infrastructure deployment with CI/CD pipelines and network-level security controls</p>
+          </div>
+          <div className="mb-2">
+            <div className="text-blue-400 font-bold">Software Developer (Dec 2023 - Dec 2024)</div>
+            <p className="text-purple-400">Law Firm</p>
+            <p>• Built scalable APIs and full-stack applications using AWS Lambda, React, and modern JavaScript frameworks</p>
+          </div>
+          <div>
+            <div className="text-blue-400 font-bold">FullStack Dev Instructor (Jul 2023 - Nov 2023)</div>
+            <p className="text-purple-400">DevMountain</p>
+            <p>• Mentored developers in full-stack technologies including React, Express, and PostgreSQL</p>
+          </div>
+          <div>
+            <div className="text-blue-400 font-bold">FullStack Dev Instructor (Jan 2023 - Jul 2023)</div>
+            <p className="text-purple-400">Mimo</p>
+            <p>• Led JavaScript curriculum and code quality instruction for multiple development cohorts</p>
           </div>
         </div>
       );
