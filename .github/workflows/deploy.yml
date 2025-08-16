@@ -40,7 +40,7 @@ jobs:
         working-directory: infra
 
       - name: Terraform Plan
-        run: terraform plan -no-color -out=tfplan -var-file="terraform.tfvars"
+        run: terraform plan -no-color -out=tfplan
         working-directory: infra
 
       - name: Save Plan Output
