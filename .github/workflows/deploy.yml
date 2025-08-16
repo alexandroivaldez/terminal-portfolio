@@ -1,100 +1,99 @@
-name: Deploy Website
+name: Deploy Infrastructure
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/deploy.yml'
+  
   pull_request:
     branches: [main]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/deploy.yml'
+
+  workflow_dispatch: # Allow manual triggering
 
 env:
   AWS_REGION: us-east-1
-  NODE_VERSION: '22'
-  
+  TF_VERSION: "1.5.0"
+
 permissions:
-  id-token: write
-  contents: read
-  pull-requests: write
+  id-token: write   # Required for OIDC token
+  contents: read    # Required to checkout code
+  pull-requests: write  # Required to comment on PRs
 
 jobs:
-  # Check what changed
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      terraform: ${{ steps.changes.outputs.terraform }}
-      react: ${{ steps.changes.outputs.react }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v2
-        id: changes
-        with:
-          filters: |
-            terraform:
-              - 'terraform/**'
-              - '.github/workflows/deploy.yml'
-            react:
-              - 'src/**'
-              - 'public/**'
-              - 'package.json'
-              - 'package-lock.json'
-
-  # Deploy infrastructure changes
   terraform:
-    needs: changes
-    if: needs.changes.outputs.terraform == 'true'
     runs-on: ubuntu-latest
     
     defaults:
       run:
         working-directory: terraform
-        
-    outputs:
-      s3_bucket: ${{ steps.output.outputs.s3_bucket }}
-      cloudfront_id: ${{ steps.output.outputs.cloudfront_id }}
     
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
-          role-session-name: terraform-deploy
-          aws-region: ${{ env.AWS_REGION }}
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
+        role-session-name: github-actions-terraform
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.0"
-          terraform_wrapper: false
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Init
-        run: terraform init
+    - name: Terraform Format Check
+      run: terraform fmt -check
+      continue-on-error: true
 
-      - name: Terraform Validate
-        run: terraform validate
+    - name: Terraform Init
+      run: terraform init
 
-      - name: Terraform Plan
-        id: plan
-        run: terraform plan -no-color
-        continue-on-error: true
+    - name: Terraform Validate
+      run: terraform validate
 
-      - name: Comment PR with Plan
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const output = `#### Terraform Plan 📖
+    - name: Terraform Plan
+      id: plan
+      run: |
+        terraform plan -no-color -out=tfplan
+        terraform show -no-color tfplan > plan_output.txt
+      continue-on-error: true
+
+    - name: Comment PR with Plan
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const plan = fs.readFileSync('terraform/plan_output.txt', 'utf8');
+          const maxGitHubBodyCharacters = 65536;
+          
+          function chunkSubstr(str, size) {
+            const numChunks = Math.ceil(str.length / size)
+            const chunks = new Array(numChunks)
+            for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
+              chunks[i] = str.substr(o, size)
+            }
+            return chunks
+          }
+          
+          // Split the Terraform plan into chunks if it's too big
+          var plans = chunkSubstr(plan, maxGitHubBodyCharacters); 
+          
+          for (let i = 0; i < plans.length; i++) {
+            const output = `### 🏗️ Terraform Plan Output Part ${i + 1}
             
-            <details><summary>Show Plan</summary>
-            
+            \`\`\`terraform
+            ${plans[i]}
             \`\`\`
-            ${{ steps.plan.outputs.stdout }}
-            \`\`\`
             
-            </details>
-            
-            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
             
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -102,79 +101,29 @@ jobs:
               repo: context.repo.repo,
               body: output
             })
+          }
 
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: terraform apply tfplan
 
-      - name: Get Terraform Outputs
-        if: github.ref == 'refs/heads/main'
-        id: output
-        run: |
-          echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
-          echo "cloudfront_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
-
-  # Build and deploy React app
-  deploy-app:
-    needs: [changes, terraform]
-    if: always() && (needs.changes.outputs.react == 'true' || needs.terraform.result == 'success')
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Build React App
-        run: npm run build
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
-          role-session-name: app-deploy
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Terraform (for state queries)
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.0"
-          terraform_wrapper: false
-
-      - name: Get Infrastructure Info
-        id: infra
-        run: |
-          if [ "${{ needs.terraform.outputs.s3_bucket }}" != "" ]; then
-            echo "s3_bucket=${{ needs.terraform.outputs.s3_bucket }}" >> $GITHUB_OUTPUT
-            echo "cloudfront_id=${{ needs.terraform.outputs.cloudfront_id }}" >> $GITHUB_OUTPUT
-          else
-            # Get from existing terraform state if infrastructure didn't change
-            cd terraform
-            terraform init
-            echo "s3_bucket=$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
-            echo "cloudfront_id=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Deploy to S3
-        run: |
-          aws s3 sync build/ s3://${{ steps.infra.outputs.s3_bucket }} --delete
-
-      - name: Invalidate CloudFront
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ steps.infra.outputs.cloudfront_id }} \
-            --paths "/*"
-
-      - name: Deployment Summary
-        run: |
-          echo "🚀 Deployment Complete!"
-          echo "📦 S3 Bucket: ${{ steps.infra.outputs.s3_bucket }}"
-          echo "🌐 CloudFront: ${{ steps.infra.outputs.cloudfront_id }}"
+    - name: Output Infrastructure Info
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        echo "🎉 Infrastructure Deployment Complete!"
+        echo ""
+        echo "📊 Outputs:"
+        terraform output
+        echo ""
+        echo "🌐 Website URL: $(terraform output -raw website_url 2>/dev/null || echo 'Not available yet')"
+        echo "☁️ CloudFront Distribution: $(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo 'Not available yet')"
+        echo "🪣 S3 Bucket: $(terraform output -raw s3_bucket_name 2>/dev/null || echo 'Not available yet')"
+        
+        if [ "$(terraform output -raw nameservers 2>/dev/null)" != "null" ] && [ "$(terraform output -raw nameservers 2>/dev/null)" != "" ]; then
+          echo ""
+          echo "📋 Next Steps:"
+          echo "1. Update your domain registrar with these nameservers:"
+          terraform output nameservers
+          echo "2. Wait 24-48 hours for DNS propagation"
+          echo "3. Your website will be live at: $(terraform output -raw website_url)"
+        fi
