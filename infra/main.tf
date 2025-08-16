@@ -1,14 +1,35 @@
+# ---------------------------------------------------
+# Providers
+# ---------------------------------------------------
 provider "aws" {
   region = var.aws_region
 }
 
+# CloudFront + ACM must always be in us-east-1
+provider "aws" {
+  alias  = "use1"
+  region = "us-east-1"
+}
+
+# ---------------------------------------------------
+# Locals
+# ---------------------------------------------------
 locals {
   full_domain = "${var.subdomain}.${var.domain_name}"
 }
 
-# --- S3 bucket ---
+# ---------------------------------------------------
+# Route 53 Hosted Zone (for root domain)
+# ---------------------------------------------------
+resource "aws_route53_zone" "main" {
+  name = var.domain_name
+}
+
+# ---------------------------------------------------
+# S3 Bucket for Website
+# ---------------------------------------------------
 resource "aws_s3_bucket" "website" {
-  bucket = "${local.full_domain}-${var.environment}"
+  bucket        = "${local.full_domain}-${var.environment}"
   force_destroy = true
 }
 
@@ -20,37 +41,55 @@ resource "aws_s3_bucket_ownership_controls" "website" {
 }
 
 resource "aws_s3_bucket_public_access_block" "website" {
-  bucket = aws_s3_bucket.website.id
-  block_public_acls   = false
-  block_public_policy = false
-  restrict_public_buckets = false
-  ignore_public_acls   = false
+  bucket                  = aws_s3_bucket.website.id
+  block_public_acls       = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+  ignore_public_acls      = true
 }
 
+# ---------------------------------------------------
+# CloudFront Origin Access Control (OAC)
+# ---------------------------------------------------
+resource "aws_cloudfront_origin_access_control" "oac" {
+  name                              = "s3-oac-${var.environment}"
+  description                       = "OAC for ${aws_s3_bucket.website.bucket}"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# ---------------------------------------------------
+# S3 Bucket Policy (allow CloudFront via OAC only)
+# ---------------------------------------------------
 resource "aws_s3_bucket_policy" "website" {
   bucket = aws_s3_bucket.website.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid       = "PublicReadGetObject"
+        Sid       = "AllowCloudFrontServicePrincipalRead"
         Effect    = "Allow"
-        Principal = "*"
-        Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.website.arn}/*"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.website.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.cdn.arn
+          }
+        }
       }
     ]
   })
 }
 
-# --- Route 53 hosted zone (must exist already) ---
-data "aws_route53_zone" "main" {
-  name         = "${var.domain_name}."
-  private_zone = false
-}
-
-# --- ACM certificate for custom domain ---
+# ---------------------------------------------------
+# ACM Certificate (must be in us-east-1)
+# ---------------------------------------------------
 resource "aws_acm_certificate" "cert" {
+  provider          = aws.use1
   domain_name       = local.full_domain
   validation_method = "DNS"
 }
@@ -64,7 +103,7 @@ resource "aws_route53_record" "cert_validation" {
     }
   }
 
-  zone_id = data.aws_route53_zone.main.zone_id
+  zone_id = aws_route53_zone.main.zone_id
   name    = each.value.name
   type    = each.value.type
   records = [each.value.record]
@@ -72,20 +111,24 @@ resource "aws_route53_record" "cert_validation" {
 }
 
 resource "aws_acm_certificate_validation" "cert_validation" {
+  provider                = aws.use1
   certificate_arn         = aws_acm_certificate.cert.arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
-# --- CloudFront distribution ---
+# ---------------------------------------------------
+# CloudFront Distribution
+# ---------------------------------------------------
 resource "aws_cloudfront_distribution" "cdn" {
-  origin {
-    domain_name = aws_s3_bucket.website.bucket_regional_domain_name
-    origin_id   = "s3-origin"
-  }
-
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
+
+  origin {
+    domain_name              = aws_s3_bucket.website.bucket_regional_domain_name
+    origin_id                = "s3-origin"
+    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+  }
 
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD"]
@@ -117,9 +160,11 @@ resource "aws_cloudfront_distribution" "cdn" {
   }
 }
 
-# --- Route 53 record pointing domain -> CloudFront ---
-resource "aws_route53_record" "alias" {
-  zone_id = data.aws_route53_zone.main.zone_id
+# ---------------------------------------------------
+# DNS Records for CloudFront
+# ---------------------------------------------------
+resource "aws_route53_record" "a_alias" {
+  zone_id = aws_route53_zone.main.zone_id
   name    = local.full_domain
   type    = "A"
 
@@ -130,7 +175,21 @@ resource "aws_route53_record" "alias" {
   }
 }
 
-# --- Upload index.html ---
+resource "aws_route53_record" "aaaa_alias" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = local.full_domain
+  type    = "AAAA"
+
+  alias {
+    name                   = aws_cloudfront_distribution.cdn.domain_name
+    zone_id                = aws_cloudfront_distribution.cdn.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+# ---------------------------------------------------
+# Upload Index.html
+# ---------------------------------------------------
 resource "aws_s3_object" "index" {
   bucket       = aws_s3_bucket.website.id
   key          = "index.html"
