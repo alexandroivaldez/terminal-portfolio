@@ -45,12 +45,12 @@ jobs:
         working-directory: infra
 
       - name: Upload Plan for Review
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
           path: infra/plan_output.txt
 
       - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'   # only apply on main branch
+        if: github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve tfplan
         working-directory: infra
