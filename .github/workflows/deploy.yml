@@ -2,128 +2,55 @@ name: Deploy Infrastructure
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/deploy.yml'
-  
-  pull_request:
-    branches: [main]
-    paths:
-      - 'infra/**'
-      - '.github/workflows/deploy.yml'
-
-  workflow_dispatch: # Allow manual triggering
-
-env:
-  AWS_REGION: us-east-1
-  TF_VERSION: "1.5.0"
-
-permissions:
-  id-token: write   # Required for OIDC token
-  contents: read    # Required to checkout code
-  pull-requests: write  # Required to comment on PRs
+    branches:
+      - main   # only deploy on pushes to main
+  workflow_dispatch: # allow manual runs
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
-    
-    defaults:
-      run:
-        working-directory: terraform
-    
+    permissions:
+      id-token: write   # required for OIDC
+      contents: read
+
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
-        role-session-name: github-actions-terraform
-        aws-region: ${{ env.AWS_REGION }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
+          aws-region: us-east-1
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: ${{ env.TF_VERSION }}
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
 
-    - name: Terraform Format Check
-      run: terraform fmt -check
-      continue-on-error: true
+      - name: Terraform Init
+        run: terraform init
+        working-directory: infra
 
-    - name: Terraform Init
-      run: terraform init
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        working-directory: infra
 
-    - name: Terraform Validate
-      run: terraform validate
+      - name: Terraform Plan
+        run: terraform plan -no-color -out=tfplan -var-file="terraform.tfvars"
+        working-directory: infra
 
-    - name: Terraform Plan
-      id: plan
-      run: |
-        terraform plan -no-color -out=tfplan
-        terraform show -no-color tfplan > plan_output.txt
-      continue-on-error: true
+      - name: Save Plan Output
+        run: terraform show -no-color tfplan > plan_output.txt
+        working-directory: infra
 
-    - name: Comment PR with Plan
-      if: github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-          const plan = fs.readFileSync('terraform/plan_output.txt', 'utf8');
-          const maxGitHubBodyCharacters = 65536;
-          
-          function chunkSubstr(str, size) {
-            const numChunks = Math.ceil(str.length / size)
-            const chunks = new Array(numChunks)
-            for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
-              chunks[i] = str.substr(o, size)
-            }
-            return chunks
-          }
-          
-          // Split the Terraform plan into chunks if it's too big
-          var plans = chunkSubstr(plan, maxGitHubBodyCharacters); 
-          
-          for (let i = 0; i < plans.length; i++) {
-            const output = `### 🏗️ Terraform Plan Output Part ${i + 1}
-            
-            \`\`\`terraform
-            ${plans[i]}
-            \`\`\`
-            
-            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            })
-          }
+      - name: Upload Plan for Review
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan
+          path: infra/plan_output.txt
 
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      run: terraform apply tfplan
-
-    - name: Output Infrastructure Info
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      run: |
-        echo "🎉 Infrastructure Deployment Complete!"
-        echo ""
-        echo "📊 Outputs:"
-        terraform output
-        echo ""
-        echo "🌐 Website URL: $(terraform output -raw website_url 2>/dev/null || echo 'Not available yet')"
-        echo "☁️ CloudFront Distribution: $(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo 'Not available yet')"
-        echo "🪣 S3 Bucket: $(terraform output -raw s3_bucket_name 2>/dev/null || echo 'Not available yet')"
-        
-        if [ "$(terraform output -raw nameservers 2>/dev/null)" != "null" ] && [ "$(terraform output -raw nameservers 2>/dev/null)" != "" ]; then
-          echo ""
-          echo "📋 Next Steps:"
-          echo "1. Update your domain registrar with these nameservers:"
-          terraform output nameservers
-          echo "2. Wait 24-48 hours for DNS propagation"
-          echo "3. Your website will be live at: $(terraform output -raw website_url)"
-        fi
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'   # only apply on main branch
+        run: terraform apply -auto-approve tfplan
+        working-directory: infra
