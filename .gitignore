@@ -39,6 +39,7 @@ pnpm-debug.log*
 .terraform.lock.hcl
 terraform.tfvars
 *.tfplan
+backend.tf
 
 # Optional: OS trash
 *.Trash-*
