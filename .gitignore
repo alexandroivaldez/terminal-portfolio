@@ -37,7 +37,6 @@ pnpm-debug.log*
 *.tfstate.backup
 .terraform/
 .terraform.lock.hcl
-terraform.tfvars
 *.tfplan
 backend.tf
 
