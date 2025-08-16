@@ -32,8 +32,8 @@ jobs:
               - 'terraform/**'
               - '.github/workflows/deploy.yml'
             react:
-              - 'client/src/**'
-              - 'client/public/**'
+              - 'src/**'
+              - 'public/**'
               - 'package.json'
               - 'package-lock.json'
 
@@ -58,7 +58,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
+          role-to-assume: arn:aws:iam::YOUR_ACCOUNT_ID:role/GitHubActions-Terraform-Deploy
           role-session-name: terraform-deploy
           aws-region: ${{ env.AWS_REGION }}
 
@@ -139,9 +139,15 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::985539757575:role/GitHub-OIDC-TerraformRole
+          role-to-assume: arn:aws:iam::YOUR_ACCOUNT_ID:role/GitHubActions-Terraform-Deploy
           role-session-name: app-deploy
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform (for state queries)
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+          terraform_wrapper: false
 
       - name: Get Infrastructure Info
         id: infra
